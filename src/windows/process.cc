@@ -16,6 +16,7 @@
 #include <windows.h>
 
 #include <jcu-process/process.h>
+#include "pipe_pair.h"
 
 namespace jcu {
 namespace process {
@@ -23,83 +24,6 @@ namespace process {
 namespace windows {
 
 static std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>,wchar_t> s_utf8_to_wstr_convert;
-
-class PipePair {
- private:
-  HANDLE wr_;
-  HANDLE rd_;
-  DWORD err_;
-
- public:
-  ~PipePair() {
-    close();
-  }
-
-  PipePair()
-  : wr_(nullptr), rd_(nullptr)
-  {
-    if (!::CreatePipe(&rd_, &wr_, nullptr, 0)) {
-      err_ = (int)::GetLastError();
-      return;
-    }
-    err_ = 0;
-  }
-
-  DWORD getError() const {
-    return err_;
-  }
-
-  void close() {
-    if (wr_ && wr_ != INVALID_HANDLE_VALUE) {
-      ::CloseHandle(wr_);
-      wr_ = nullptr;
-    }
-    if (rd_ && rd_ != INVALID_HANDLE_VALUE) {
-      ::CloseHandle(rd_);
-      rd_ = nullptr;
-    }
-  }
-  HANDLE getWriteHandle() {
-    return wr_;
-  }
-  HANDLE getReadHandle() {
-    return rd_;
-  }
-  HANDLE detachWriteHandle() {
-    HANDLE h = wr_;
-    wr_ = nullptr;
-    return h;
-  }
-  HANDLE detachReadHandle() {
-    HANDLE h = rd_;
-    wr_ = nullptr;
-    return h;
-  }
-  HANDLE detachInheritableWriteHandle() {
-    HANDLE handle = nullptr;
-    if (!DuplicateHandle(
-        GetCurrentProcess(), wr_,
-        GetCurrentProcess(), &handle, 0,
-        TRUE, DUPLICATE_SAME_ACCESS)) {
-      err_ = ::GetLastError();
-      return nullptr;
-    }
-    wr_ = nullptr;
-    return handle;
-  }
-  HANDLE detachInheritableReadHandle() {
-    HANDLE handle = nullptr;
-    if (!DuplicateHandle(
-        GetCurrentProcess(), rd_,
-        GetCurrentProcess(), &handle, 0,
-        TRUE, DUPLICATE_SAME_ACCESS)) {
-      err_ = ::GetLastError();
-      return nullptr;
-    }
-    rd_ = nullptr;
-    return handle;
-  }
-};
 
 class WindowsProcess : public Process {
  private:

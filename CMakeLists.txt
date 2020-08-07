@@ -15,6 +15,8 @@ set(SRC_FILES)
 if (WIN32)
     set(PLAT_SRC_FILES
             ${SRC_DIR}/windows/process.cc
+            ${SRC_DIR}/windows/pipe_pair.h
+            ${SRC_DIR}/windows/pipe_pair.cc
             )
 endif(WIN32)
 
