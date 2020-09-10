@@ -119,7 +119,6 @@ class WindowsProcess : public Process {
       DWORD pipe_bytes_left_this_message = 0;
       if ((handle_index == 0) || (handle_index == 1)) {
         if (::PeekNamedPipe(target_handle, buffer, sizeof(buffer), &pipe_read_bytes, &pipe_total_bytes_avail, &pipe_bytes_left_this_message)) {
-          printf("*peek pipe = %d / %d / %d\n", pipe_read_bytes, pipe_total_bytes_avail, pipe_bytes_left_this_message);
           if (pipe_read_bytes > 0) {
             if (::ReadFile(target_handle, buffer, sizeof(buffer), &pipe_read_bytes, nullptr)) {
               processed_size = pipe_read_bytes;
