@@ -100,54 +100,66 @@ class WindowsProcess : public Process {
     HANDLE handles[3] = {
         pipe_stdout_.getReadHandle(), pipe_stderr_.getReadHandle(), pi_.hProcess
     };
-    char buffer[128] = {0};
-    int processed_size = 0;
-    DWORD dwWait = ::WaitForMultipleObjects(3, handles, FALSE, 100);
-    if (dwWait == WAIT_TIMEOUT) {
-      return kEventLoopIdle;
-    }else if((dwWait < 0) || (dwWait > (WAIT_OBJECT_0 + 2))) {
-      if (perr) *perr = ::GetLastError();
-      return kEventLoopError;
-    }
+    int killed_process_chance = 0;
+    do {
+      char buffer[128] = {0};
+      int processed_size = 0;
+      DWORD dwWait = ::WaitForMultipleObjects(3, handles, FALSE, 100);
+      if (dwWait == WAIT_TIMEOUT) {
+        return kEventLoopIdle;
+      } else if ((dwWait < 0) || (dwWait > (WAIT_OBJECT_0 + 2))) {
+        if (perr) *perr = ::GetLastError();
+        return kEventLoopError;
+      }
 
-    int handle_index = dwWait - WAIT_OBJECT_0;
-    HANDLE target_handle = handles[handle_index];
-    DWORD pipe_read_bytes = 0;
-    DWORD pipe_total_bytes_avail = 0;
-    DWORD pipe_bytes_left_this_message = 0;
-    if ((handle_index == 0) || (handle_index == 1)) {
-      if (::PeekNamedPipe(target_handle, buffer, sizeof(buffer), &pipe_read_bytes, &pipe_total_bytes_avail, &pipe_bytes_left_this_message)) {
-        printf("*peek pipe = %d / %d / %d\n", pipe_read_bytes, pipe_total_bytes_avail, pipe_bytes_left_this_message);
-        if (pipe_read_bytes > 0) {
-          if (::ReadFile(target_handle, buffer, sizeof(buffer), &pipe_read_bytes, nullptr)) {
-            processed_size = pipe_read_bytes;
-            switch (dwWait) {
-              case (WAIT_OBJECT_0):
-                handler(kReadStdout, buffer, processed_size);
-                break;
-              case (WAIT_OBJECT_0 + 1):
-                handler(kReadStderr, buffer, processed_size);
-                break;
+      int handle_index = dwWait - WAIT_OBJECT_0;
+      HANDLE target_handle = handles[handle_index];
+      DWORD pipe_read_bytes = 0;
+      DWORD pipe_total_bytes_avail = 0;
+      DWORD pipe_bytes_left_this_message = 0;
+      if ((handle_index == 0) || (handle_index == 1)) {
+        if (::PeekNamedPipe(target_handle, buffer, sizeof(buffer), &pipe_read_bytes, &pipe_total_bytes_avail, &pipe_bytes_left_this_message)) {
+          printf("*peek pipe = %d / %d / %d\n", pipe_read_bytes, pipe_total_bytes_avail, pipe_bytes_left_this_message);
+          if (pipe_read_bytes > 0) {
+            if (::ReadFile(target_handle, buffer, sizeof(buffer), &pipe_read_bytes, nullptr)) {
+              processed_size = pipe_read_bytes;
+              switch (dwWait) {
+                case (WAIT_OBJECT_0):
+                  handler(kReadStdout, buffer, processed_size);
+                  break;
+                case (WAIT_OBJECT_0 + 1):
+                  handler(kReadStderr, buffer, processed_size);
+                  break;
+              }
+              return kEventLoopHandled;
             }
-            return kEventLoopHandled;
+          } else {
+            handle_index = -1;
           }
         }
       }
-    }
 
-    if (handle_index < 2) {
-      dwWait = ::WaitForSingleObject(pi_.hProcess, 100);
-      if (dwWait == WAIT_OBJECT_0) {
-        dwWait = (WAIT_OBJECT_0 + 2);
+      if (handle_index < 2) {
+        if (handle_index != -1) {
+          killed_process_chance = 0;
+        }
+        dwWait = ::WaitForSingleObject(pi_.hProcess, 100);
+        if (dwWait == WAIT_OBJECT_0) {
+          dwWait = (WAIT_OBJECT_0 + 2);
+        }
       }
-    }
 
-    switch (dwWait) {
-      case (WAIT_OBJECT_0 + 2):
-        process_alive_ = false;
-        handler(kProcessExited, buffer, processed_size);
-        return kEventLoopDone;
-    }
+      switch (dwWait) {
+        case (WAIT_OBJECT_0 + 2):
+          killed_process_chance++;
+          if (killed_process_chance >= 2) {
+            process_alive_ = false;
+            handler(kProcessExited, buffer, processed_size);
+            return kEventLoopDone;
+          }
+          break;
+      }
+    } while (killed_process_chance > 0);
     return kEventLoopIdle;
   }
 
