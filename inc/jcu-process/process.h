@@ -47,6 +47,8 @@ class Process {
   virtual bool isAlive() const = 0;
   virtual bool checkAlive() = 0;
 
+  virtual int getExitCode() const = 0;
+
   virtual int terminateProcess() = 0;
 
  public:

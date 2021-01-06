@@ -22,6 +22,7 @@ endif(WIN32)
 
 set(INC_FILES
         ${INC_DIR}/jcu-process/process.h
+        ${INC_DIR}/jcu-process/windows_process.h
         )
 
 add_library(jcu_process STATIC ${SRC_FILES} ${INC_FILES} ${PLAT_SRC_FILES})

@@ -16,6 +16,7 @@
 #include <windows.h>
 
 #include <jcu-process/process.h>
+#include <jcu-process/windows_process.h>
 #include "pipe_pair.h"
 
 namespace jcu {
@@ -25,7 +26,7 @@ namespace windows {
 
 static std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>,wchar_t> s_utf8_to_wstr_convert;
 
-class WindowsProcess : public Process {
+class WindowsProcessImpl : public WindowsProcess {
  private:
   std::basic_string<wchar_t> command_line_;
   PROCESS_INFORMATION pi_;
@@ -34,18 +35,26 @@ class WindowsProcess : public Process {
   PipePair pipe_stderr_;
 
   bool process_alive_;
+  int exit_code_;
 
-  WindowsProcess(const std::basic_string<wchar_t> &command_line)
-  : command_line_(command_line), pi_({0}), process_alive_(false)
+  CustomCreateProcess custom_create_process_;
+
+  WindowsProcessImpl(const std::basic_string<wchar_t> &command_line)
+  : command_line_(command_line), pi_({0}), process_alive_(false), exit_code_(-1), custom_create_process_()
   { }
 
  public:
-  virtual ~WindowsProcess() {
+  virtual ~WindowsProcessImpl() {
 
+  }
+
+  void setCustomCreateProcess(const CustomCreateProcess& supplier) override {
+    custom_create_process_ = supplier;
   }
 
   int execute() override {
     int err_code;
+    DWORD cp_err;
 
     std::vector<wchar_t> command_line_buf(command_line_.length() + 1);
     ::memcpy(command_line_buf.data(), command_line_.c_str(), command_line_.size() * sizeof(wchar_t));
@@ -68,18 +77,29 @@ class WindowsProcess : public Process {
     si.hStdOutput = pipe_stdout_.detachInheritableWriteHandle();
     si.hStdError = pipe_stderr_.detachInheritableWriteHandle();
 
-    if(!::CreateProcessW(
-        nullptr,
-        command_line_buf.data(),
-        nullptr,
-        nullptr,
-        TRUE,
-        CREATE_NEW_CONSOLE,
-        nullptr,
-        nullptr,
-        &si,
-        &pi_
-        )) {
+    if (custom_create_process_) {
+      cp_err = custom_create_process_(
+          command_line_buf.data(),
+          &si,
+          &pi_
+          );
+    } else {
+      if(!::CreateProcessW(
+          nullptr,
+          command_line_buf.data(),
+          nullptr,
+          nullptr,
+          TRUE,
+          CREATE_NEW_CONSOLE,
+          nullptr,
+          nullptr,
+          &si,
+          &pi_
+      )) {
+        cp_err = ::GetLastError();
+      }
+    }
+    if (cp_err) {
       if (si.hStdInput) {
         ::CloseHandle(si.hStdInput);
       }
@@ -89,7 +109,7 @@ class WindowsProcess : public Process {
       if (si.hStdError) {
         ::CloseHandle(si.hStdError);
       }
-      return ::GetLastError();
+      return (int) cp_err;
     }
 
     process_alive_ = true;
@@ -152,7 +172,11 @@ class WindowsProcess : public Process {
         case (WAIT_OBJECT_0 + 2):
           killed_process_chance++;
           if (killed_process_chance >= 2) {
+            DWORD exit_code = 0;
             process_alive_ = false;
+            if (::GetExitCodeProcess(pi_.hProcess, &exit_code)) {
+              exit_code_ = (int)exit_code;
+            }
             handler(kProcessExited, buffer, processed_size);
             return kEventLoopDone;
           }
@@ -184,6 +208,10 @@ class WindowsProcess : public Process {
     return alive;
   }
 
+  int getExitCode() const override {
+    return exit_code_;
+  }
+
   int terminateProcess() override {
     if (!::TerminateProcess(pi_.hProcess, 1)) {
       return (int)::GetLastError();
@@ -193,21 +221,21 @@ class WindowsProcess : public Process {
 
  public:
   static Process *prepare(const std::basic_string<wchar_t>& command_line) {
-    return new WindowsProcess(command_line);
+    return new WindowsProcessImpl(command_line);
   }
 };
 
 }
 
 Process* Process::prepare(const char *command) {
-  return windows::WindowsProcess::prepare(
+  return windows::WindowsProcessImpl::prepare(
       windows::s_utf8_to_wstr_convert.from_bytes(command)
       );
 }
 
 #ifdef _UNICODE
 Process* Process::prepare_w(const wchar_t *command) {
-  return windows::WindowsProcess::prepare(command);
+  return windows::WindowsProcessImpl::prepare(command);
 }
 #endif
 
