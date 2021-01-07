@@ -219,6 +219,14 @@ class WindowsProcessImpl : public WindowsProcess {
     return 0;
   }
 
+  int writeToStdin(const char* data, int length) override {
+    DWORD number_of_bytes_written = 0;
+    if (!::WriteFile(pipe_stdin_.getWriteHandle(), data, length, &number_of_bytes_written, nullptr)) {
+      return (int) ::GetLastError();
+    }
+    return 0;
+  }
+
  public:
   static Process *prepare(const std::basic_string<wchar_t>& command_line) {
     return new WindowsProcessImpl(command_line);

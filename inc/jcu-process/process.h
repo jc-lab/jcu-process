@@ -51,6 +51,8 @@ class Process {
 
   virtual int terminateProcess() = 0;
 
+  virtual int writeToStdin(const char* data, int length) = 0;
+
  public:
   static Process* prepare(const char *command);
 #ifdef _UNICODE
