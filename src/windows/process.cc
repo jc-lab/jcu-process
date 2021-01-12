@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 #include <codecvt>
+#include <atomic>
 
 #include <string.h>
 #include <tchar.h>
@@ -37,10 +38,12 @@ class WindowsProcessImpl : public WindowsProcess {
   bool process_alive_;
   int exit_code_;
 
+  std::atomic_int interest_index_;
+
   CustomCreateProcess custom_create_process_;
 
   WindowsProcessImpl(const std::basic_string<wchar_t> &command_line)
-  : command_line_(command_line), pi_({0}), process_alive_(false), exit_code_(-1), custom_create_process_()
+  : command_line_(command_line), pi_({0}), process_alive_(false), exit_code_(-1), custom_create_process_(), interest_index_(0)
   { }
 
  public:
@@ -117,14 +120,29 @@ class WindowsProcessImpl : public WindowsProcess {
   }
 
   EventLoopResult eventloop(const EventLoopHandler_t &handler, int *perr) override {
-    HANDLE handles[3] = {
-        pipe_stdout_.getReadHandle(), pipe_stderr_.getReadHandle(), pi_.hProcess
+    std::pair<int, HANDLE> handles[3] = {
+            std::pair<int, HANDLE>(0, pipe_stdout_.getReadHandle()),
+            std::pair<int, HANDLE>(1, pipe_stderr_.getReadHandle()),
+            std::pair<int, HANDLE>(2, pi_.hProcess)
     };
+    int handle_types[3] = {1, 2, 3};
     int killed_process_chance = 0;
     do {
+      int interest_index = interest_index_.fetch_add(1);
+      int ordered_indexes[3] = {
+        handles[(interest_index + 0) % 3].first,
+        handles[(interest_index + 1) % 3].first,
+        handles[(interest_index + 2) % 3].first
+      };
+      HANDLE ordered_handles[3] = {
+        handles[(interest_index + 0) % 3].second,
+        handles[(interest_index + 1) % 3].second,
+        handles[(interest_index + 2) % 3].second
+      };
+
       char buffer[128] = {0};
       int processed_size = 0;
-      DWORD dwWait = ::WaitForMultipleObjects(3, handles, FALSE, 100);
+      DWORD dwWait = ::WaitForMultipleObjects(3, ordered_handles, FALSE, 100);
       if (dwWait == WAIT_TIMEOUT) {
         return kEventLoopIdle;
       } else if ((dwWait < 0) || (dwWait > (WAIT_OBJECT_0 + 2))) {
@@ -132,23 +150,24 @@ class WindowsProcessImpl : public WindowsProcess {
         return kEventLoopError;
       }
 
-      int handle_index = dwWait - WAIT_OBJECT_0;
-      HANDLE target_handle = handles[handle_index];
+      int handle_index = ordered_indexes[dwWait - WAIT_OBJECT_0];
+      int is_stdout = handle_index == 0;
+      int is_stderr = handle_index == 1;
+      int is_proc = handle_index == 2;
+
+      HANDLE target_handle = handles[handle_index].second;
       DWORD pipe_read_bytes = 0;
       DWORD pipe_total_bytes_avail = 0;
       DWORD pipe_bytes_left_this_message = 0;
-      if ((handle_index == 0) || (handle_index == 1)) {
+      if (is_stdout || is_stderr) {
         if (::PeekNamedPipe(target_handle, buffer, sizeof(buffer), &pipe_read_bytes, &pipe_total_bytes_avail, &pipe_bytes_left_this_message)) {
           if (pipe_read_bytes > 0) {
             if (::ReadFile(target_handle, buffer, sizeof(buffer), &pipe_read_bytes, nullptr)) {
               processed_size = pipe_read_bytes;
-              switch (dwWait) {
-                case (WAIT_OBJECT_0):
-                  handler(kReadStdout, buffer, processed_size);
-                  break;
-                case (WAIT_OBJECT_0 + 1):
-                  handler(kReadStderr, buffer, processed_size);
-                  break;
+              if (is_stdout) {
+                handler(kReadStdout, buffer, processed_size);
+              } else if (is_stderr) {
+                handler(kReadStderr, buffer, processed_size);
               }
               return kEventLoopHandled;
             }
@@ -158,29 +177,26 @@ class WindowsProcessImpl : public WindowsProcess {
         }
       }
 
-      if (handle_index < 2) {
+      if (handle_index == -1 || is_proc) {
         if (handle_index != -1) {
           killed_process_chance = 0;
         }
         dwWait = ::WaitForSingleObject(pi_.hProcess, 100);
         if (dwWait == WAIT_OBJECT_0) {
-          dwWait = (WAIT_OBJECT_0 + 2);
+          is_proc = true;
         }
       }
-
-      switch (dwWait) {
-        case (WAIT_OBJECT_0 + 2):
-          killed_process_chance++;
-          if (killed_process_chance >= 2) {
-            DWORD exit_code = 0;
-            process_alive_ = false;
-            if (::GetExitCodeProcess(pi_.hProcess, &exit_code)) {
-              exit_code_ = (int)exit_code;
-            }
-            handler(kProcessExited, buffer, processed_size);
-            return kEventLoopDone;
+      if (is_proc) {
+        killed_process_chance++;
+        if (killed_process_chance >= 2) {
+          DWORD exit_code = 0;
+          process_alive_ = false;
+          if (::GetExitCodeProcess(pi_.hProcess, &exit_code)) {
+            exit_code_ = (int) exit_code;
           }
-          break;
+          handler(kProcessExited, buffer, processed_size);
+          return kEventLoopDone;
+        }
       }
     } while (killed_process_chance > 0);
     return kEventLoopIdle;
